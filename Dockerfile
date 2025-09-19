@@ -12,7 +12,7 @@ WORKDIR /app
 RUN apk add --no-cache --virtual .build-dependencies build-base curl-dev \
     && pip install pycurl \
     && apk del .build-dependencies
-
+COPY web ./web/
 COPY requirements.txt requirements.txt
 RUN pip3 install -r requirements.txt
 
