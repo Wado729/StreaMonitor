@@ -52,7 +52,7 @@ SEGMENT_TIME = env.str("STRMNTR_SEGMENT_TIME", None)
 
 # Bind address for the web server
 # 0.0.0.0 for remote access from all host
-WEBSERVER_HOST = env.str("STRMNTR_HOST", "127.0.0.1")
+WEBSERVER_HOST = env.str("STRMNTR_HOST", "0.0.0.0")
 WEBSERVER_PORT = env.int("STRMNTR_PORT", 5000)
 
 # set frequency in seconds of how often the streamer list will update
