@@ -159,10 +159,18 @@ class StripChat(Bot):
         if not doppio_url:
             raise Exception("Doppio.js not found")
         
-        # Fetch doppio.js
-        r = s.get(doppio_url, headers=cls.headers, timeout=5)
-        r.raise_for_status()
-        StripChat._doppio_js_data = r.text
+        # Fetch doppio.js with retry
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                r = s.get(doppio_url, headers=cls.headers, timeout=15)
+                r.raise_for_status()
+                StripChat._doppio_js_data = r.text
+                break
+            except requests.exceptions.ChunkedEncodingError:
+                if attempt == max_retries - 1:
+                    raise
+        t       ime.sleep(2)
 
     @classmethod
     @lru_cache(maxsize=512)  # Increased cache
