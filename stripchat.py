@@ -335,4 +335,4 @@ class StripChat(Bot):
             return Status.RESTRICTED
         
         return Status.UNKNOWN
-Bot.loaded_sites.add(StripChat)
+LOADED_SITES.add(StripChat)
