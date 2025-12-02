@@ -14,7 +14,7 @@ from typing import Optional, Tuple, List, Dict
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from streamonitor.bot import Bot
+from streamonitor.bot import Bot, LOADED_SITES
 from streamonitor.downloaders.hls import getVideoNativeHLS
 from streamonitor.enums import Status
 
