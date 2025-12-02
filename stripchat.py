@@ -170,7 +170,7 @@ class StripChat(Bot):
             except requests.exceptions.ChunkedEncodingError:
                 if attempt == max_retries - 1:
                     raise
-        t       ime.sleep(2)
+                time.sleep(2)
 
     @classmethod
     @lru_cache(maxsize=512)  # Increased cache
