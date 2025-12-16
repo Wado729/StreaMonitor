@@ -134,7 +134,7 @@ class StripChat(Bot):
         features = StripChat._static_data["features"]
         mmp_origin = features["MMPExternalSourceOrigin"]
         mmp_version = StripChat._static_data["featuresV2"]["playerModuleExternalLoading"]["mmpVersion"]
-        mmp_base = f"{mmp_origin}/v{mmp_version}"
+        mmp_base = f"{mmp_origin}/{mmp_version}"
         
         # Fetch main.js
         r = s.get(f"{mmp_base}/main.js", headers=cls.headers, timeout=5)
