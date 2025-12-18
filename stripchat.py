@@ -1,4 +1,3 @@
-cat > stripchat.py << 'ENDOFFILE'
 import itertools
 import json
 import os.path
