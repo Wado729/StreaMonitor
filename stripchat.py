@@ -286,4 +286,3 @@ class StripChat(RoomIdBot):
                 streamer.setStatus(Status.UNKNOWN)
 
 LOADED_SITES.add(StripChat)
-ENDOFFILE
