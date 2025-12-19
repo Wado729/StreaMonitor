@@ -21,7 +21,7 @@ class StripChat(RoomIdBot):
     _main_js_data = None
     _doppio_js_data = ''
     _mouflon_cache_filename = 'stripchat_mouflon_keys.json'
-    _mouflon_keys: dict = None
+    _mouflon_keys: dict = {"Zeechoej4aleeshi": "ubahjae7goPoodi6"}
     _cached_keys: dict[str, bytes] = None
     _PRIVATE_STATUSES = frozenset(["private", "groupShow", "p2p", "virtualPrivate", "p2pVoice"])
     _OFFLINE_STATUSES = frozenset(["off", "idle"])
