@@ -6,9 +6,8 @@ import re
 import requests
 import base64
 import hashlib
-import time
 
-from streamonitor.bot import RoomIdBot, LOADED_SITES
+from streamonitor.bot import RoomIdBot
 from streamonitor.downloaders.hls import getVideoNativeHLS
 from streamonitor.enums import Status
 
@@ -20,10 +19,10 @@ class StripChat(RoomIdBot):
     bulk_update = True
     _static_data = None
     _main_js_data = None
-    _doppio_js_data = None
+    _doppio_js_data = ''
     _mouflon_cache_filename = 'stripchat_mouflon_keys.json'
-    _mouflon_keys: dict = {}
-    _cached_keys: dict = {}
+    _mouflon_keys: dict = None
+    _cached_keys: dict[str, bytes] = None
     _PRIVATE_STATUSES = frozenset(["private", "groupShow", "p2p", "virtualPrivate", "p2pVoice"])
     _OFFLINE_STATUSES = frozenset(["off", "idle"])
 
@@ -43,7 +42,7 @@ class StripChat(RoomIdBot):
             try:
                 self.getInitialData()
             except Exception as e:
-                print(f'Error initializing StripChat static data: {e}')
+                print('Error initializing StripChat static data:', e)
 
         super().__init__(username, room_id)
         self._id = None
@@ -53,59 +52,26 @@ class StripChat(RoomIdBot):
     @classmethod
     def getInitialData(cls):
         session = requests.Session()
-        
-        # Very comprehensive browser headers to bypass Cloudflare
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-            'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-        })
-        
-        # Add small delay to seem more human
-        time.sleep(1)
-        
-        r = session.get('https://stripchat.com/', timeout=10)  # First visit main page
-        time.sleep(0.5)
-        
-        r = session.get('https://hu.stripchat.com/api/front/v3/config/static', timeout=10)
+        r = session.get('https://hu.stripchat.com/api/front/v3/config/static', headers=cls.headers)
         if r.status_code != 200:
-            raise Exception(f"Failed to fetch static data from StripChat: {r.status_code}")
+            raise Exception("Failed to fetch static data from StripChat")
         StripChat._static_data = r.json().get('static')
 
         mmp_origin = StripChat._static_data['features']['MMPExternalSourceOrigin']
         mmp_version = StripChat._static_data['featuresV2']['playerModuleExternalLoading']['mmpVersion']
         mmp_base = f"{mmp_origin}/{mmp_version}"
 
-        r = session.get(f"{mmp_base}/main.js", timeout=10)
+        r = session.get(f"{mmp_base}/main.js", headers=cls.headers)
         if r.status_code != 200:
-            raise Exception(f"Failed to fetch main.js from StripChat: {r.status_code}")
+            raise Exception("Failed to fetch main.js from StripChat")
         StripChat._main_js_data = r.content.decode('utf-8')
 
-        doppio_js_index = re.findall('([0-9]+):"Doppio"', StripChat._main_js_data)
-        if not doppio_js_index:
-            raise Exception("Could not find Doppio index")
-        doppio_js_index = doppio_js_index[0]
-        
-        doppio_js_hash = re.findall(f'{doppio_js_index}:\\"([a-zA-Z0-9]{{20}})\\"', StripChat._main_js_data)
-        if not doppio_js_hash:
-            raise Exception("Could not find Doppio hash")
-        doppio_js_hash = doppio_js_hash[0]
+        doppio_js_index = re.findall('([0-9]+):"Doppio"', StripChat._main_js_data)[0]
+        doppio_js_hash = re.findall(f'{doppio_js_index}:\\"([a-zA-Z0-9]{{20}})\\"', StripChat._main_js_data)[0]
 
-        r = session.get(f"{mmp_base}/chunk-Doppio-{doppio_js_hash}.js", timeout=10)
+        r = session.get(f"{mmp_base}/chunk-Doppio-{doppio_js_hash}.js", headers=cls.headers)
         if r.status_code != 200:
-            raise Exception(f"Failed to fetch doppio.js from StripChat: {r.status_code}")
+            raise Exception("Failed to fetch doppio.js from StripChat")
         StripChat._doppio_js_data = r.content.decode('utf-8')
 
     @classmethod
@@ -143,9 +109,6 @@ class StripChat(RoomIdBot):
         if pkey in cls._mouflon_keys:
             return cls._mouflon_keys[pkey]
         else:
-            if not cls._doppio_js_data:
-                print("Warning: Doppio JS data not loaded")
-                return None
             _pdks = re.findall(f'"{pkey}:(.*?)"', cls._doppio_js_data)
             if len(_pdks) > 0:
                 pdk = cls._mouflon_keys.setdefault(pkey, _pdks[0])
@@ -305,5 +268,3 @@ class StripChat(RoomIdBot):
             else:
                 print(f'[{streamer.siteslug}] {streamer.username}: Bulk update got unknown status: {status}')
                 streamer.setStatus(Status.UNKNOWN)
-
-LOADED_SITES.add(StripChat)
