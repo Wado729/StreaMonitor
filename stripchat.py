@@ -98,24 +98,44 @@ class StripChat(RoomIdBot):
                     break
 
             if not doppio_js_names:
-                # Last resort: find ALL .js file references in main.js for debugging
-                all_js_refs = re.findall(r'["\']([\w.-]+\.js)["\']', StripChat._main_js_data)
-                unique_refs = list(set(all_js_refs))
-                print(f'[SC] DEBUG: No Doppio.js found. All .js references in main.js ({len(unique_refs)}):')
-                for ref in sorted(unique_refs):
-                    print(f'[SC]   - {ref}')
-                # Also dump first 2000 chars for manual inspection
-                print(f'[SC] DEBUG: main.js first 2000 chars:')
-                print(StripChat._main_js_data[:2000])
-                print(f'[SC] DEBUG: main.js last 1000 chars:')
-                print(StripChat._main_js_data[-1000:])
-                # Try extracting keys directly from main.js as last resort
-                StripChat._doppio_js_data = StripChat._main_js_data
+                # Doppio.js is bundled into main.js — search for keys directly
+                js_data = StripChat._main_js_data
+                print(f'[SC] DEBUG: main.js size: {len(js_data)} bytes')
+
+                # Search for mouflon-related strings
+                for keyword in ['mouflon', 'MOUFLON', 'pkey', 'pdkey', 'sha256', 'SHA256', 'decrypt', 'zokee', 'Zokee']:
+                    positions = [m.start() for m in re.finditer(re.escape(keyword), js_data, re.IGNORECASE)]
+                    if positions:
+                        print(f'[SC] DEBUG: "{keyword}" found at {len(positions)} position(s)')
+                        for pos in positions[:5]:
+                            start = max(0, pos - 80)
+                            end = min(len(js_data), pos + 80)
+                            snippet = js_data[start:end].replace('\n', '\\n')
+                            print(f'[SC]   ...{snippet}...')
+
+                # Search for long alphanumeric strings (12+ chars) that could be keys
+                # Look for quoted strings containing colon-separated long tokens
+                colon_patterns = re.findall(r'["\']([A-Za-z0-9]{8,}:[A-Za-z0-9]{8,})["\']', js_data)
+                if colon_patterns:
+                    print(f'[SC] DEBUG: Found {len(colon_patterns)} quoted colon-pair(s):')
+                    for cp in colon_patterns[:10]:
+                        print(f'[SC]   {cp}')
+
+                # Look for arrays or objects with long alphanumeric strings
+                long_strings = re.findall(r'["\']([A-Za-z0-9]{12,})["\']', js_data)
+                if long_strings:
+                    unique_long = list(set(long_strings))
+                    print(f'[SC] DEBUG: Found {len(unique_long)} unique long alphanum strings (12+ chars):')
+                    for ls in sorted(unique_long)[:30]:
+                        print(f'[SC]   {ls}')
+
+                # Try to extract keys directly from main.js
+                StripChat._doppio_js_data = js_data
                 StripChat._populateMouflonKeysFromDoppio()
                 if StripChat._mouflon_keys:
                     print(f'[SC] Found {len(StripChat._mouflon_keys)} key(s) directly in main.js!')
                     return
-                raise Exception("Could not find Doppio.js reference in main.js")
+                raise Exception("Keys not found in bundled main.js — structure may have changed")
 
             doppio_js_name = doppio_js_names[0]
             print(f'[SC] Found Doppio.js: {doppio_js_name}')
