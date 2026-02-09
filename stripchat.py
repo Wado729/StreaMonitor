@@ -82,11 +82,39 @@ class StripChat(RoomIdBot):
                 raise Exception(f"main.js fetch failed: {r.status_code}")
             StripChat._main_js_data = r.content.decode('utf-8')
 
-            doppio_js_names = re.findall(r'require[(]"./(Doppio.*?[.]js)"[)]', StripChat._main_js_data)
+            # Try multiple patterns to find Doppio.js reference
+            doppio_patterns = [
+                r'require\s*\(\s*["\']\./(Doppio[^"\']*\.js)["\']',      # require("./Doppio*.js")
+                r'["\']\./(Doppio[^"\']*\.js)["\']',                      # any "./Doppio*.js" string
+                r'["\']\.?/?(Doppio[^"\']*\.js)["\']',                    # "Doppio*.js" with optional path
+                r'["\'](Doppio[^"\']*\.js)["\']',                         # bare "Doppio*.js"
+                r'["\'].*/?(doppio[^"\']*\.js)["\']',                     # case-insensitive path
+            ]
+            doppio_js_names = []
+            for pat in doppio_patterns:
+                doppio_js_names = re.findall(pat, StripChat._main_js_data, re.IGNORECASE)
+                if doppio_js_names:
+                    print(f'[SC] Matched Doppio pattern: {pat}')
+                    break
+
             if not doppio_js_names:
-                # Fallback: try alternate quote patterns
-                doppio_js_names = re.findall(r'["\']\./(Doppio[^"\']*\.js)["\']', StripChat._main_js_data)
-            if not doppio_js_names:
+                # Last resort: find ALL .js file references in main.js for debugging
+                all_js_refs = re.findall(r'["\']([\w.-]+\.js)["\']', StripChat._main_js_data)
+                unique_refs = list(set(all_js_refs))
+                print(f'[SC] DEBUG: No Doppio.js found. All .js references in main.js ({len(unique_refs)}):')
+                for ref in sorted(unique_refs):
+                    print(f'[SC]   - {ref}')
+                # Also dump first 2000 chars for manual inspection
+                print(f'[SC] DEBUG: main.js first 2000 chars:')
+                print(StripChat._main_js_data[:2000])
+                print(f'[SC] DEBUG: main.js last 1000 chars:')
+                print(StripChat._main_js_data[-1000:])
+                # Try extracting keys directly from main.js as last resort
+                StripChat._doppio_js_data = StripChat._main_js_data
+                StripChat._populateMouflonKeysFromDoppio()
+                if StripChat._mouflon_keys:
+                    print(f'[SC] Found {len(StripChat._mouflon_keys)} key(s) directly in main.js!')
+                    return
                 raise Exception("Could not find Doppio.js reference in main.js")
 
             doppio_js_name = doppio_js_names[0]
