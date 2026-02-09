@@ -20,9 +20,6 @@ class StripChat(RoomIdBot):
 
     bulk_update = True
     _static_data = None
-    _main_js_data = None
-    _doppio_js_data = None
-    _mouflon_cache_filename = 'stripchat_mouflon_keys.json'
     _mouflon_keys: dict = None
     _cached_keys: dict[str, bytes] = None
     _PRIVATE_STATUSES = frozenset(["private", "groupShow", "p2p", "virtualPrivate", "p2pVoice"])
@@ -34,16 +31,106 @@ class StripChat(RoomIdBot):
         'maleFemale': Gender.BOTH
     }
 
-    # Load cached keys from disk if available (fallback if Doppio fetch fails)
-    if os.path.exists(_mouflon_cache_filename):
-        with open(_mouflon_cache_filename) as f:
+    # ── Mouflon Key Configuration ──────────────────────────────────────────
+    #
+    # StripChat encrypts HLS segment URLs using a pkey/pdkey scheme (v2 PSCH).
+    # Keys are NOT extractable from JS source code — they only exist as runtime
+    # variables inside webpack closure scope during stream initialization.
+    #
+    # To extract fresh keys, use Chrome/Firefox DevTools:
+    #   1. Open a StripChat stream and press F12
+    #   2. Sources tab → find chunk file under img.doppiocdn.com
+    #   3. Pretty-print, search for _onPlaylistLoadingStateChanged
+    #   4. Set breakpoint on that function
+    #   5. When breakpoint hits, check Scope → Closure for 16-char alphanumeric values
+    #   6. The pkey appears in the m3u8 playlist; the pdkey is in the closure variables
+    #
+    # See: https://github.com/aitschti/plugin.video.sc19/issues/19
+    #
+    # Configure your keys in 'mouflon_keys.json' next to this script:
+    #   { "pkey": "YourPkeyHere1234", "pdkey": "YourPdkeyHere567" }
+    #
+    # Or as a dict of multiple pkey→pdkey mappings:
+    #   { "Pkey1here1234567": "Pdkey1here123456", "Pkey2here1234567": "Pdkey2here123456" }
+
+    _MOUFLON_CONFIG_FILENAME = 'mouflon_keys.json'
+
+    # Hardcoded fallback keys — these WILL eventually stop working when SC rotates.
+    # Last updated: Feb 9, 2026. If downloads fail, extract fresh keys via DevTools.
+    _FALLBACK_KEYS = {
+        'Ook7quaiNgiyuhai': '$iPRUU0AnxoOSif9',   # current active key as of Feb 2026
+        'Zeechoej4aleeshi': 'ubahjae7goPoodi6',   # deprecated ~Jan 9 2026
+    }
+
+    _keys_loaded = False
+    _keys_warned = False
+
+    @classmethod
+    def _loadMouflonKeys(cls):
+        """Load mouflon pkey/pdkey from config file, with fallback to hardcoded keys."""
+        if cls._keys_loaded:
+            return
+        cls._keys_loaded = True
+
+        if cls._mouflon_keys is None:
+            cls._mouflon_keys = {}
+
+        # 1. Try loading from config file
+        config_path = cls._MOUFLON_CONFIG_FILENAME
+        if os.path.exists(config_path):
             try:
-                if not isinstance(_mouflon_keys, dict):
-                    _mouflon_keys = {}
-                _mouflon_keys.update(json.load(f))
-                print('Loaded StripChat mouflon key cache')
+                with open(config_path) as f:
+                    data = json.load(f)
+
+                if isinstance(data, dict):
+                    # Format A: { "pkey": "...", "pdkey": "..." }
+                    if 'pkey' in data and 'pdkey' in data:
+                        cls._mouflon_keys[data['pkey']] = data['pdkey']
+                        print(f'[SC] Loaded mouflon key from {config_path}: pkey={data["pkey"][:4]}...')
+                    else:
+                        # Format B: { "pkey1": "pdkey1", "pkey2": "pdkey2", ... }
+                        for k, v in data.items():
+                            if isinstance(k, str) and isinstance(v, str) and len(k) >= 12 and len(v) >= 12:
+                                cls._mouflon_keys[k] = v
+                        if cls._mouflon_keys:
+                            print(f'[SC] Loaded {len(cls._mouflon_keys)} mouflon key(s) from {config_path}')
             except Exception as e:
-                print('Error loading mouflon key cache:', e)
+                print(f'[SC] Error loading {config_path}: {e}')
+
+        # 2. Add fallback keys (lower priority — config keys checked first)
+        for k, v in cls._FALLBACK_KEYS.items():
+            if k not in cls._mouflon_keys:
+                cls._mouflon_keys[k] = v
+
+        if not cls._mouflon_keys:
+            cls._printKeyHelp()
+
+    @classmethod
+    def _printKeyHelp(cls):
+        """Print instructions for obtaining mouflon keys."""
+        if cls._keys_warned:
+            return
+        cls._keys_warned = True
+        print('')
+        print('=' * 72)
+        print('[SC] ERROR: No mouflon decryption keys configured!')
+        print('')
+        print('  StripChat encrypts stream URLs. Keys must be extracted manually')
+        print('  using browser DevTools (they cannot be auto-extracted from JS).')
+        print('')
+        print('  Quick fix: Create "mouflon_keys.json" with:')
+        print('    { "pkey": "YOUR_PKEY_HERE", "pdkey": "YOUR_PDKEY_HERE" }')
+        print('')
+        print('  To extract keys:')
+        print('    1. Open a StripChat stream in Chrome/Firefox, press F12')
+        print('    2. Sources tab -> find chunk file under img.doppiocdn.com')
+        print('    3. Pretty-print -> search "_onPlaylistLoadingStateChanged"')
+        print('    4. Set breakpoint -> when hit, check Scope -> Closure')
+        print('    5. Look for 16-char alphanumeric pkey/pdkey values')
+        print('')
+        print('  Full guide: https://github.com/aitschti/plugin.video.sc19/issues/19')
+        print('=' * 72)
+        print('')
 
     def __init__(self, username, room_id=None):
         if StripChat._static_data is None:
@@ -52,6 +139,9 @@ class StripChat(RoomIdBot):
                 self.getInitialData()
             except Exception as e:
                 print('Error initializing StripChat static data:', e)
+
+        # Load mouflon keys on first instantiation
+        StripChat._loadMouflonKeys()
 
         super().__init__(username, room_id)
         self._id = None
@@ -66,121 +156,34 @@ class StripChat(RoomIdBot):
             raise Exception("Failed to fetch static data from StripChat")
         StripChat._static_data = r.json().get('static')
 
-        # --- bloomfi3ld: Fetch Doppio.js for mouflon key auto-extraction ---
-        try:
-            mmp_origin = StripChat._static_data['features']['MMPExternalSourceOrigin']
-            mmp_version = StripChat._static_data['featuresV2']['playerModuleExternalLoading']['mmpVersion']
-            # mmp_version may already contain 'v' prefix (e.g. 'v2.3.1')
-            if mmp_version.startswith('v'):
-                mmp_base = f"{mmp_origin}/{mmp_version}"
-            else:
-                mmp_base = f"{mmp_origin}/v{mmp_version}"
-            print(f'[SC] MMP Base: {mmp_base}')
-
-            r = session.get(f"{mmp_base}/main.js", headers=cls.headers)
-            if r.status_code != 200:
-                raise Exception(f"main.js fetch failed: {r.status_code}")
-            StripChat._main_js_data = r.content.decode('utf-8')
-
-            # Try multiple patterns to find Doppio.js reference
-            doppio_patterns = [
-                r'require\s*\(\s*["\']\./(Doppio[^"\']*\.js)["\']',      # require("./Doppio*.js")
-                r'["\']\./(Doppio[^"\']*\.js)["\']',                      # any "./Doppio*.js" string
-                r'["\']\.?/?(Doppio[^"\']*\.js)["\']',                    # "Doppio*.js" with optional path
-                r'["\'](Doppio[^"\']*\.js)["\']',                         # bare "Doppio*.js"
-                r'["\'].*/?(doppio[^"\']*\.js)["\']',                     # case-insensitive path
-            ]
-            doppio_js_names = []
-            for pat in doppio_patterns:
-                doppio_js_names = re.findall(pat, StripChat._main_js_data, re.IGNORECASE)
-                if doppio_js_names:
-                    print(f'[SC] Matched Doppio pattern: {pat}')
-                    break
-
-            if not doppio_js_names:
-                # Doppio.js is bundled into main.js — search for keys directly
-                js_data = StripChat._main_js_data
-                print(f'[SC] DEBUG: main.js size: {len(js_data)} bytes')
-
-                # Search for mouflon-related strings
-                for keyword in ['mouflon', 'MOUFLON', 'pkey', 'pdkey', 'sha256', 'SHA256', 'decrypt', 'zokee', 'Zokee']:
-                    positions = [m.start() for m in re.finditer(re.escape(keyword), js_data, re.IGNORECASE)]
-                    if positions:
-                        print(f'[SC] DEBUG: "{keyword}" found at {len(positions)} position(s)')
-                        for pos in positions[:5]:
-                            start = max(0, pos - 80)
-                            end = min(len(js_data), pos + 80)
-                            snippet = js_data[start:end].replace('\n', '\\n')
-                            print(f'[SC]   ...{snippet}...')
-
-                # Search for long alphanumeric strings (12+ chars) that could be keys
-                # Look for quoted strings containing colon-separated long tokens
-                colon_patterns = re.findall(r'["\']([A-Za-z0-9]{8,}:[A-Za-z0-9]{8,})["\']', js_data)
-                if colon_patterns:
-                    print(f'[SC] DEBUG: Found {len(colon_patterns)} quoted colon-pair(s):')
-                    for cp in colon_patterns[:10]:
-                        print(f'[SC]   {cp}')
-
-                # Look for arrays or objects with long alphanumeric strings
-                long_strings = re.findall(r'["\']([A-Za-z0-9]{12,})["\']', js_data)
-                if long_strings:
-                    unique_long = list(set(long_strings))
-                    print(f'[SC] DEBUG: Found {len(unique_long)} unique long alphanum strings (12+ chars):')
-                    for ls in sorted(unique_long)[:30]:
-                        print(f'[SC]   {ls}')
-
-                # Try to extract keys directly from main.js
-                StripChat._doppio_js_data = js_data
-                StripChat._populateMouflonKeysFromDoppio()
-                if StripChat._mouflon_keys:
-                    print(f'[SC] Found {len(StripChat._mouflon_keys)} key(s) directly in main.js!')
-                    return
-                raise Exception("Keys not found in bundled main.js — structure may have changed")
-
-            doppio_js_name = doppio_js_names[0]
-            print(f'[SC] Found Doppio.js: {doppio_js_name}')
-
-            r = session.get(f"{mmp_base}/{doppio_js_name}", headers=cls.headers)
-            if r.status_code != 200:
-                raise Exception(f"Doppio.js fetch failed: {r.status_code}")
-            StripChat._doppio_js_data = r.content.decode('utf-8')
-
-            # Extract keys and persist to cache
-            StripChat._populateMouflonKeysFromDoppio()
-            if StripChat._mouflon_keys:
-                print(f'[SC] Extracted {len(StripChat._mouflon_keys)} mouflon key(s) from Doppio.js')
-                try:
-                    with open(cls._mouflon_cache_filename, 'w') as f:
-                        json.dump(StripChat._mouflon_keys, f)
-                    print(f'[SC] Saved mouflon keys to {cls._mouflon_cache_filename}')
-                except Exception as e:
-                    print(f'[SC] Failed to save mouflon key cache: {e}')
-            else:
-                print('[SC] WARNING: No mouflon keys extracted from Doppio.js')
-        except Exception as e:
-            print(f'[SC] Doppio key extraction failed: {e}')
-            if cls._mouflon_keys:
-                print(f'[SC] Falling back to {len(cls._mouflon_keys)} cached key(s)')
-            else:
-                print('[SC] No cached keys available either — downloads will likely fail')
-
     @classmethod
-    def _populateMouflonKeysFromDoppio(cls):
-        """Extracts pkey:decode_key pairs from Doppio.js using a generic regex.
-        Enables dynamic pkey discovery without relying on fixed values."""
-        try:
-            if not cls._doppio_js_data:
-                return
-            if cls._mouflon_keys is None:
-                cls._mouflon_keys = {}
-            pattern = r"\b[A-Za-z0-9]{12,}:[A-Za-z0-9]{12,}\b"
-            matches = re.findall(pattern, cls._doppio_js_data)
-            for m in matches:
-                left, right = m.split(":", 1)
-                if left and right and left not in cls._mouflon_keys:
-                    cls._mouflon_keys[left] = right
-        except Exception:
-            pass
+    def getMouflonDecKey(cls, pkey):
+        """Look up the pdkey for a given pkey from configured keys."""
+        cls._loadMouflonKeys()
+
+        if not pkey:
+            return None
+
+        # Direct lookup
+        if pkey in cls._mouflon_keys:
+            return cls._mouflon_keys[pkey]
+
+        # If the playlist pkey doesn't match any configured key, try using
+        # any available key — SC may have rotated which pkey is active
+        if cls._mouflon_keys:
+            # Prefer non-fallback keys (user-configured are added first)
+            for k, v in cls._mouflon_keys.items():
+                if k not in cls._FALLBACK_KEYS:
+                    print(f'[SC] WARNING: Playlist pkey "{pkey[:4]}..." not in config, trying configured key "{k[:4]}..."')
+                    return v
+            # Last resort: try a fallback key
+            first_key = next(iter(cls._mouflon_keys))
+            print(f'[SC] WARNING: Using fallback key "{first_key[:4]}..." -- this may be outdated!')
+            print(f'[SC] If downloads fail, extract fresh keys via DevTools (see mouflon_keys.json)')
+            return cls._mouflon_keys[first_key]
+
+        cls._printKeyHelp()
+        return None
 
     @classmethod
     def m3u_decoder(cls, content):
@@ -195,25 +198,13 @@ class StripChat(RoomIdBot):
             encrypted_data = base64.b64decode(encrypted_b64 + "==")
             return bytes(a ^ b for (a, b) in zip(encrypted_data, itertools.cycle(hash_bytes))).decode("utf-8")
 
-        # Extract Mouflon from M3U8; if pkey is missing or unmapped, choose one detected from Doppio
+        # Extract psch/pkey from playlist
         psch, pkey = StripChat._getMouflonFromM3U(content)
         if not psch and pkey:
             psch = 'v1'
-        # Ensure we have a valid pkey that exists in the detected mapping
-        cls._populateMouflonKeysFromDoppio()
-        if not pkey or (cls._mouflon_keys and pkey not in cls._mouflon_keys):
-            try:
-                candidates = list(cls._mouflon_keys.keys()) if cls._mouflon_keys else []
-                chosen = None
-                for c in candidates:
-                    if c.lower().startswith('zokee'):
-                        chosen = c
-                        break
-                if not chosen and candidates:
-                    chosen = candidates[0]
-                pkey = chosen
-            except Exception:
-                pkey = None
+
+        # Get pdkey for the pkey found in the playlist
+        pdkey = cls.getMouflonDecKey(pkey) if pkey else None
 
         def _append_params(url: str) -> str:
             try:
@@ -240,11 +231,11 @@ class StripChat(RoomIdBot):
         last_decoded_file = None
         for line in lines:
             if line.startswith(_mouflon_file_attr):
-                if pkey:
-                    pdkey = cls.getMouflonDecKey(pkey)
-                    if pdkey:
+                if pkey and pdkey:
+                    try:
                         last_decoded_file = _decode(line[len(_mouflon_file_attr):], pdkey)
-                    else:
+                    except Exception as e:
+                        print(f'[SC] Mouflon decode error: {e} -- keys may be wrong/expired')
                         last_decoded_file = None
                 else:
                     last_decoded_file = None
@@ -269,31 +260,6 @@ class StripChat(RoomIdBot):
             else:
                 decoded += line + '\n'
         return decoded
-
-    @classmethod
-    def getMouflonDecKey(cls, pkey):
-        if cls._mouflon_keys is None:
-            cls._mouflon_keys = {}
-        if pkey in cls._mouflon_keys:
-            return cls._mouflon_keys[pkey]
-        # Try populating from Doppio if not present yet
-        cls._populateMouflonKeysFromDoppio()
-        if pkey in cls._mouflon_keys:
-            return cls._mouflon_keys[pkey]
-        # Fallback to specific pattern if the generic did not find it
-        if cls._doppio_js_data:
-            match = re.findall(f'"{pkey}:(.*?)"', cls._doppio_js_data)
-            if match:
-                cls._mouflon_keys[pkey] = match[0]
-                return match[0]
-        # As a last resort, return a decode key for a detected pkey
-        candidates = list(cls._mouflon_keys.keys()) if cls._mouflon_keys else []
-        for c in candidates:
-            if c.lower().startswith('zokee'):
-                return cls._mouflon_keys[c]
-        if candidates:
-            return cls._mouflon_keys[candidates[0]]
-        return None
 
     @staticmethod
     def _getMouflonFromM3U(m3u8_doc):
@@ -330,22 +296,20 @@ class StripChat(RoomIdBot):
         if not psch and pkey:
             psch = 'v1'
 
-        # Ensure pkey maps to a decode key; override with detected if unmapped/missing
-        StripChat._populateMouflonKeysFromDoppio()
-        if not pkey or (StripChat._mouflon_keys and pkey not in StripChat._mouflon_keys):
-            candidates = list(StripChat._mouflon_keys.keys()) if StripChat._mouflon_keys else []
-            chosen = None
-            for c in candidates:
-                if c.lower().startswith('zokee'):
-                    chosen = c
-                    break
-            if not chosen and candidates:
-                chosen = candidates[0]
-            pkey = chosen
-
+        # Resolve the pkey to use — prefer playlist's pkey if we have its pdkey,
+        # otherwise fall back to whatever key we have configured
         pdkey = StripChat.getMouflonDecKey(pkey) if pkey else None
+        if pdkey is None and pkey:
+            # Playlist has a pkey we don't recognize; try any configured key
+            if StripChat._mouflon_keys:
+                alt_pkey = next(iter(StripChat._mouflon_keys))
+                pdkey = StripChat._mouflon_keys[alt_pkey]
+                pkey = alt_pkey
+                print(f'[SC] Overriding playlist pkey with configured key "{pkey[:4]}..."')
+
         if pdkey is None:
-            self.log('Failed to get mouflon decryption key')
+            self.log('Failed to get mouflon decryption key -- see mouflon_keys.json instructions above')
+            StripChat._printKeyHelp()
             return []
 
         variants = super().getPlaylistVariants(m3u_data=m3u8_doc)
