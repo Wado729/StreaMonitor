@@ -188,6 +188,8 @@ class StripChat(RoomIdBot):
     @classmethod
     def m3u_decoder(cls, content):
         _mouflon_file_attr = "#EXT-X-MOUFLON:FILE:"
+        _mouflon_uri_attr = "#EXT-X-MOUFLON:URI:"
+        _mouflon_extref_attr = "#EXT-X-MOUFLON:EXT-REF:"
         _mouflon_filename = 'media.mp4'
 
         def _decode(encrypted_b64: str, key: str) -> str:
@@ -203,7 +205,7 @@ class StripChat(RoomIdBot):
         if not psch and pkey:
             psch = 'v1'
 
-        # Get pdkey for the pkey found in the playlist
+        # Get pdkey for the pkey found in the playlist (needed for old FILE format)
         pdkey = cls.getMouflonDecKey(pkey) if pkey else None
 
         def _append_params(url: str) -> str:
@@ -226,39 +228,75 @@ class StripChat(RoomIdBot):
             except Exception:
                 return url
 
+        def _replace_uri_in_line(line: str, new_url: str) -> str:
+            """Replace the URI="..." attribute in an HLS tag with the real URL."""
+            return re.sub(r'URI="([^"]*)"', f'URI="{new_url}"', line)
+
         decoded = ''
         lines = content.splitlines()
-        last_decoded_file = None
+        last_decoded_url = None
         for line in lines:
-            if line.startswith(_mouflon_file_attr):
+            # New v2 format: #EXT-X-MOUFLON:URI:<full_url>
+            if line.startswith(_mouflon_uri_attr):
+                last_decoded_url = line[len(_mouflon_uri_attr):]
+                # Don't output MOUFLON lines — HLS parsers don't understand them
+                continue
+
+            # New v2 format: #EXT-X-MOUFLON:EXT-REF:<metadata> — skip
+            elif line.startswith(_mouflon_extref_attr):
+                continue
+
+            # Old v1 format: #EXT-X-MOUFLON:FILE:<base64_encrypted>
+            elif line.startswith(_mouflon_file_attr):
                 if pkey and pdkey:
                     try:
-                        last_decoded_file = _decode(line[len(_mouflon_file_attr):], pdkey)
+                        last_decoded_url = _decode(line[len(_mouflon_file_attr):], pdkey)
                     except Exception as e:
                         print(f'[SC] Mouflon decode error: {e} -- keys may be wrong/expired')
-                        last_decoded_file = None
+                        last_decoded_url = None
                 else:
-                    last_decoded_file = None
-            elif line.endswith(_mouflon_filename) and last_decoded_file:
-                replaced = line.replace(_mouflon_filename, last_decoded_file)
-                decoded += _append_params(replaced) + '\n'
-                last_decoded_file = None
+                    last_decoded_url = None
+                continue
+
+            # EXT-X-PART with media.mp4 placeholder — replace with real URL
+            elif line.startswith('#EXT-X-PART:') and _mouflon_filename in line:
+                if last_decoded_url:
+                    real_url = _append_params(last_decoded_url)
+                    line = _replace_uri_in_line(line, real_url)
+                    last_decoded_url = None
+                else:
+                    m = re.search(r'URI="([^"]+)"', line)
+                    if m:
+                        line = _replace_uri_in_line(line, _append_params(m.group(1)))
+                decoded += line + '\n'
+
+            # Bare URL line ending with media.mp4 — replace with real URL
+            elif _mouflon_filename in line and last_decoded_url and (line.startswith('http://') or line.startswith('https://')):
+                decoded += _append_params(last_decoded_url) + '\n'
+                last_decoded_url = None
+
+            # EXT-X-MAP and other tags with URIs — append psch/pkey params
             elif line.startswith('#EXT-X-MAP:'):
                 m = re.search(r'URI="([^"]+)"', line)
                 if m:
-                    new_uri = _append_params(m.group(1))
-                    line = re.sub(r'URI="([^"]+)"', f'URI="{new_uri}"', line)
+                    line = _replace_uri_in_line(line, _append_params(m.group(1)))
                 decoded += line + '\n'
+
+            # EXT-X-PART without media.mp4 — just append params
             elif line.startswith('#EXT-X-PART:'):
                 m = re.search(r'URI="([^"]+)"', line)
                 if m:
-                    new_uri = _append_params(m.group(1))
-                    line = re.sub(r'URI="([^"]+)"', f'URI="{new_uri}"', line)
+                    line = _replace_uri_in_line(line, _append_params(m.group(1)))
                 decoded += line + '\n'
+
+            # Bare URLs — append params
             elif line.startswith('http://') or line.startswith('https://'):
                 decoded += _append_params(line) + '\n'
+
+            # Everything else passes through
             else:
                 decoded += line + '\n'
+
         return decoded
 
     @staticmethod
