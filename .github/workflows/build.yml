@@ -9,11 +9,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Set image tag
-        id: tag
+      - name: Compute image tag and lowercase owner
+        id: meta
         run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "OWNER_LC=$OWNER_LC" >> $GITHUB_OUTPUT
           BRANCH_NAME=${GITHUB_REF#refs/heads/}
           if [ "$BRANCH_NAME" = "master" ]; then
             echo "IMAGE_TAG=latest" >> $GITHUB_OUTPUT
@@ -23,15 +25,15 @@ jobs:
           fi
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/streamonitor:${{ steps.tag.outputs.IMAGE_TAG }}
+          tags: ghcr.io/${{ steps.meta.outputs.OWNER_LC }}/streamonitor:${{ steps.meta.outputs.IMAGE_TAG }}
