@@ -3,6 +3,40 @@ A Python3 application for monitoring and saving (mostly adult) live streams from
 
 Inspired by [Recordurbate](https://github.com/oliverjrose99/Recordurbate)
 
+## This fork (Wado729/StreaMonitor)
+
+Fork of [lossless1024/StreaMonitor](https://github.com/lossless1024/StreaMonitor) with fixes for
+breakage introduced by upstream site changes in early 2026. Every push to `master` publishes a
+private container image at `ghcr.io/wado729/streamonitor:latest` (see [Docker support](#docker-support)).
+
+Changes over upstream as of 2026-04-17:
+
+- **Chaturbate LLHLS fix.** CB switched to low-latency HLS with separate audio and video renditions.
+  The old code handed ffmpeg a video-only chunklist, `-c:a copy` had no audio stream, and ffmpeg exited
+  with return code 8. The fix rebuilds a minimal master playlist (selected video variant + matching
+  audio group, absolute URIs) into `<outputFolder>/.playlist.m3u8` and feeds that local file to
+  ffmpeg. `-protocol_whitelist` and `-rw_timeout` added so ffmpeg can read the local master and stops
+  hanging on frozen sessions. Credit: upstream issue
+  [#342](https://github.com/lossless1024/StreaMonitor/issues/342) / `borahorzagobachul@99963b0`.
+- **HTTP-only ffmpeg options gated.** `-user_agent` and `-cookies` are private options of the HTTP
+  protocol. ffmpeg rejects them at command-parse time when `-i` is a local `file://` (as it now is
+  for CB). Both are now gated on `url.startswith(('http://','https://'))` so direct-HTTPS inputs
+  (other sites) still get them.
+- **StripChat mouflon keys bundled.** `stripchat_mouflon_keys.json` now ships with three currently-known
+  pkey→pdkey pairs, and the `Dockerfile` actually `COPY`s it into the image (upstream's does not).
+  A best-effort `_tryLiveExtractMouflonKey` fallback fetches the current Doppio JS bundle and regexes
+  the key out; it works against pre-v2.1.3 bundles and fails loudly (`Add manually`) on current
+  obfuscated ones. When that happens, source a new `pkey:pdkey` pair from upstream issue
+  [#283](https://github.com/lossless1024/StreaMonitor/issues/283) / `baconator696/cbstream` /
+  `lvzhenbo/screc` and append it to the JSON.
+- **UI size now reflects in-progress recordings.** The HLS downloader writes `<base>.tmp.ts` until
+  stream end, then remuxes to `.mp4`/`.mkv`. `cache_file_list` whitelisted only muxed containers, so
+  the per-streamer size read 0 B throughout every live StripChat/etc. recording. `ts` added to the
+  whitelist.
+- **CI workflow fixes.** Lowercased `github.repository_owner` for the ghcr path, added explicit
+  `permissions: packages: write` (forks' `GITHUB_TOKEN` is read-only by default), bumped action
+  versions.
+
 ## Supported sites
 | Site name     | Abbreviation | Aliases                     | Quirks                 | Selectable resolution |
 |---------------|--------------|-----------------------------|------------------------|-----------------------|
