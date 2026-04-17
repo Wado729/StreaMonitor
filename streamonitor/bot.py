@@ -298,11 +298,33 @@ class Bot(Thread):
         if not variant_m3u8.is_variant and len(sources) >= 1:
             self.logger.warn("Not variant playlist, can't select resolution")
             return None
-        return sources  # [(url, (width, height)),...]
+        return sources, variant_m3u8  # ([(url, (width, height)),...], m3u8.M3U8)
+
+    def constructMasterPlaylist(self, master_url, wanted_url, variant_m3u8):
+        # Keep only the selected video variant, rewrite its URI to absolute
+        playlists = variant_m3u8.playlists.copy()
+        for playlist in playlists:
+            variant_m3u8.playlists.remove(playlist)
+            if playlist.uri == wanted_url:
+                playlist.uri = urljoin(master_url, wanted_url)
+                variant_m3u8.playlists.append(playlist)
+
+        # Rewrite audio (and other) media URIs to absolute
+        for media in variant_m3u8.media:
+            media.uri = urljoin(master_url, media.uri)
+
+        playlist_path = os.path.join(self.outputFolder, ".playlist.m3u8")
+        os.makedirs(self.outputFolder, exist_ok=True)
+        variant_m3u8.dump(playlist_path)
+        return playlist_path
 
     def getWantedResolutionPlaylist(self, url):
         try:
-            sources = self.getPlaylistVariants(url)
+            variants = self.getPlaylistVariants(url)
+            if type(variants) is tuple:
+                sources, variant_m3u8 = variants
+            else:
+                sources, variant_m3u8 = variants, None
             if sources is None:
                 return None
 
@@ -349,6 +371,8 @@ class Bot(Thread):
                     frame_rate = f" {selected_source['frame_rate']}fps"
                 self.logger.info(f"Selected {selected_source['resolution'][0]}x{selected_source['resolution'][1]}{frame_rate} resolution")
             selected_source_url = selected_source['url']
+            if variant_m3u8 is not None:
+                return self.constructMasterPlaylist(url, selected_source_url, variant_m3u8)
             return urljoin(url, selected_source_url)
         except BaseException as e:
             self.logger.error("Can't get playlist, got some error: " + str(e))

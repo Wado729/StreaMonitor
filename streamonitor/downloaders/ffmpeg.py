@@ -31,6 +31,8 @@ def getVideoFfmpeg(self, url, filename):
         '-max_reload', '20',
         '-seg_max_retry', '20',
         '-m3u8_hold_counters', '20',
+        '-protocol_whitelist', 'file,https,tcp,tls,crypto,data',
+        '-rw_timeout', '15000000',
         '-i', url,
         '-c:a', 'copy',
         '-c:v', 'copy',
