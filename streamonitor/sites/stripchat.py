@@ -107,8 +107,46 @@ class StripChat(RoomIdBot):
             cls._mouflon_keys = {}
         if pkey in cls._mouflon_keys:
             return cls._mouflon_keys[pkey]
-        # else: find pdkey
+        # Not in cache — try best-effort live extraction from StripChat's JS bundle.
+        # Works against pre-v2.1.3 (Dec 2025) bundles where the "pkey:pdkey" string
+        # appears verbatim in chunk-Doppio-*.js. Fails cleanly on obfuscated bundles;
+        # in that case the user must add the pdkey manually to
+        # stripchat_mouflon_keys.json.
+        pdkey = cls._tryLiveExtractMouflonKey(pkey)
+        if pdkey:
+            cls._mouflon_keys[pkey] = pdkey
+            print(f'[SC] Auto-extracted mouflon key for pkey "{pkey}"')
+            return pdkey
+        print(f'[SC] pkey "{pkey}" not in stripchat_mouflon_keys.json and '
+              f'auto-extract failed (StripChat JS obfuscation). Add manually.')
         return None
+
+    @classmethod
+    def _tryLiveExtractMouflonKey(cls, pkey):
+        try:
+            s = requests.Session()
+            r = s.get('https://stripchat.com/api/front/v3/config/static',
+                      headers=cls.headers, timeout=10)
+            st = r.json().get('static') or {}
+            origin = (st.get('features') or {}).get('MMPExternalSourceOrigin')
+            mmp_version = (((st.get('featuresV2') or {}).get('playerModuleExternalLoading')) or {}).get('mmpVersion')
+            if not origin or not mmp_version:
+                return None
+            base = f'{origin}/v{mmp_version}'
+            main_js = s.get(f'{base}/main.js', headers=cls.headers, timeout=10).text
+            idx_m = re.search(r'(\d+):"Doppio"', main_js)
+            if not idx_m:
+                return None
+            chunk_hash_m = re.search(rf'{idx_m.group(1)}:"([a-zA-Z0-9]{{16,32}})"', main_js)
+            if not chunk_hash_m:
+                return None
+            doppio_js = s.get(f'{base}/chunk-Doppio-{chunk_hash_m.group(1)}.js',
+                              headers=cls.headers, timeout=10).text
+            m = re.search(rf'"{re.escape(pkey)}:([^"]+)"', doppio_js)
+            return m.group(1) if m else None
+        except Exception as e:
+            print(f'[SC] _tryLiveExtractMouflonKey error: {e}')
+            return None
 
     @staticmethod
     def _getMouflonFromM3U(m3u8_doc):

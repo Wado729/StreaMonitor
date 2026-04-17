@@ -17,6 +17,7 @@ COPY requirements.txt requirements.txt
 RUN pip3 install -r requirements.txt
 
 COPY *.py ./
+COPY stripchat_mouflon_keys.json ./
 COPY streamonitor ./streamonitor
 
 EXPOSE 5000
