@@ -9,10 +9,15 @@ from parameters import DEBUG, SEGMENT_TIME, CONTAINER, FFMPEG_PATH, FFMPEG_READR
 
 
 def getVideoFfmpeg(self, url, filename):
-    cmd = [
-        FFMPEG_PATH,
-        '-user_agent', self.headers['User-Agent']
-    ]
+    cmd = [FFMPEG_PATH]
+
+    # -user_agent only applies when the input is an http(s) URL. When we feed
+    # ffmpeg a local master playlist file, it rejects -user_agent at parse
+    # time ("Option user_agent not found"). Pass the UA via -headers instead,
+    # which is accepted by the HLS demuxer and propagates to child HTTP requests.
+    ua = self.headers.get('User-Agent')
+    if ua:
+        cmd.extend(['-headers', f'User-Agent: {ua}\r\n'])
 
     if type(self.cookies) is requests.cookies.RequestsCookieJar:
         cookies_text = ''
