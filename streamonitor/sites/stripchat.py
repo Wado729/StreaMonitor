@@ -145,7 +145,7 @@ class StripChat(RoomIdBot):
         if pdkey is None:
             self.log(f'Failed to get mouflon decryption key')
             return []
-        variants = super().getPlaylistVariants(m3u_data=m3u8_doc)
+        variants, _ = super().getPlaylistVariants(m3u_data=m3u8_doc)
         return [variant | {'url': f'{variant["url"]}{"&" if "?" in variant["url"] else "?"}psch={psch}&pkey={pkey}'}
                 for variant in variants]
 
