@@ -11,15 +11,16 @@ from parameters import DEBUG, SEGMENT_TIME, CONTAINER, FFMPEG_PATH, FFMPEG_READR
 def getVideoFfmpeg(self, url, filename):
     cmd = [FFMPEG_PATH]
 
-    # -user_agent only applies when the input is an http(s) URL. When we feed
-    # ffmpeg a local master playlist file, it rejects -user_agent at parse
-    # time ("Option user_agent not found"). Pass the UA via -headers instead,
-    # which is accepted by the HLS demuxer and propagates to child HTTP requests.
-    ua = self.headers.get('User-Agent')
-    if ua:
-        cmd.extend(['-headers', f'User-Agent: {ua}\r\n'])
+    # -user_agent is an HTTP protocol option. ffmpeg only accepts it when the
+    # top-level input is http(s). When the input is a local master playlist
+    # (file://), ffmpeg errors with "Option user_agent not found" and exits
+    # code 8 before fetching anything. The HLS demuxer will use a default UA
+    # for segment requests in that case, which CB/etc. accept.
+    input_is_http = isinstance(url, str) and url.startswith(('http://', 'https://'))
+    if input_is_http:
+        cmd.extend(['-user_agent', self.headers['User-Agent']])
 
-    if type(self.cookies) is requests.cookies.RequestsCookieJar:
+    if input_is_http and type(self.cookies) is requests.cookies.RequestsCookieJar:
         cookies_text = ''
         for cookie in self.cookies:
             cookies_text += cookie.name + "=" + cookie.value + "; path=" + cookie.path + '; domain=' + cookie.domain + '\n'
