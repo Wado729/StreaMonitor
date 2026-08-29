@@ -230,7 +230,7 @@ class StripChat(RoomIdBot):
         if username == self.username:
             self._update_lastInfo(data)
 
-        if 'user' not in data:
+        if not data or 'user' not in data:
             return None
         if 'user' not in data['user']:
             return None
