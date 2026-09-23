@@ -21,6 +21,8 @@ class StripChat(RoomIdBot):
     _mouflon_cache_filename = 'stripchat_mouflon_keys.json'
     _mouflon_keys: dict = None
     _cached_keys: dict[str, bytes] = None
+    _remote_keys_attempted = False
+    _KEYS_REMOTE_URL = 'https://raw.githubusercontent.com/kesamom/stripchat_mouflon/main/stripchat_mouflon_keys.json'
     _PRIVATE_STATUSES = frozenset(["private", "groupShow", "p2p", "virtualPrivate", "p2pVoice"])
     _OFFLINE_STATUSES = frozenset(["off", "idle"])
 
@@ -107,18 +109,34 @@ class StripChat(RoomIdBot):
             cls._mouflon_keys = {}
         if pkey in cls._mouflon_keys:
             return cls._mouflon_keys[pkey]
-        # Not in cache — try best-effort live extraction from StripChat's JS bundle.
-        # Works against pre-v2.1.3 (Dec 2025) bundles where the "pkey:pdkey" string
-        # appears verbatim in chunk-Doppio-*.js. Fails cleanly on obfuscated bundles;
-        # in that case the user must add the pdkey manually to
-        # stripchat_mouflon_keys.json.
+        # Unknown key: refresh the community-maintained key set once (self-heals on rotation).
+        if not cls._remote_keys_attempted:
+            cls._remote_keys_attempted = True
+            try:
+                r = requests.get(cls._KEYS_REMOTE_URL, timeout=10)
+                if r.status_code == 200:
+                    remote_keys = r.json()
+                    if isinstance(remote_keys, dict) and remote_keys:
+                        cls._mouflon_keys.update(remote_keys)
+                        try:
+                            with open(cls._mouflon_cache_filename, 'w') as f:
+                                json.dump(cls._mouflon_keys, f, indent=2)
+                        except Exception as _we:
+                            print('[SC] Could not cache mouflon keys:', _we)
+                        print('[SC] Updated mouflon keys from remote repository')
+            except Exception as _e:
+                print('[SC] Failed to update mouflon keys remotely:', _e)
+            if pkey in cls._mouflon_keys:
+                return cls._mouflon_keys[pkey]
+        # Fallback: best-effort live extraction from StripChat's JS bundle
+        # (works on pre-obfuscation bundles; fails cleanly otherwise).
         pdkey = cls._tryLiveExtractMouflonKey(pkey)
         if pdkey:
             cls._mouflon_keys[pkey] = pdkey
             print(f'[SC] Auto-extracted mouflon key for pkey "{pkey}"')
             return pdkey
         print(f'[SC] pkey "{pkey}" not in stripchat_mouflon_keys.json and '
-              f'auto-extract failed (StripChat JS obfuscation). Add manually.')
+              f'remote/auto-extract failed. Add manually.')
         return None
 
     @classmethod
