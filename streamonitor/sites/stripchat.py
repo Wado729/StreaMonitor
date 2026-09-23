@@ -222,58 +222,85 @@ class StripChat(RoomIdBot):
             self.lastInfo |= data['cam']
         return None
 
+    @classmethod
+    def _fetchModelsList(cls, model_ids):
+        # --- models/list 418 fix (2026-09-23) ---
+        # The per-username /cam API is Cloudflare bot-blocked (HTTP 418).
+        # models/list is a sibling endpoint that is NOT blocked and is bulk-capable.
+        base_url = 'https://stripchat.com/api/front/models/list?'
+        batch_num = 100
+        data_map = {}
+        id_list = [str(m) for m in model_ids]
+        for _batch in [id_list[i:i + batch_num] for i in range(0, len(id_list), batch_num)]:
+            session = requests.Session()
+            session.headers.update(cls.headers)
+            try:
+                r = session.get(base_url + '&'.join('modelIds[]=' + mid for mid in _batch), timeout=10)
+                data = r.json()
+            except (requests.exceptions.JSONDecodeError, ValueError, requests.exceptions.RequestException):
+                print('[SC] Failed to parse JSON response from models/list')
+                return {}
+            data_map |= {str(model['id']): model for model in data.get('models', [])}
+        return data_map
+
     def getRoomIdFromUsername(self, username):
         if username == self.username and self.room_id is not None:
             return self.room_id
-
-        data = self._getStatusData(username)
-        if username == self.username:
-            self._update_lastInfo(data)
-
-        if not data or 'user' not in data:
+        try:
+            r = requests.get('https://hu.stripchat.com/api/front/users/user-ids/' + username,
+                             headers=self.headers, timeout=10)
+            data = r.json()
+            _id = str(data['id']) if data.get('id') else None
+        except requests.exceptions.JSONDecodeError:
+            self.log('Failed to parse JSON response')
             return None
-        if 'user' not in data['user']:
+        except (KeyError, TypeError, requests.exceptions.RequestException):
+            self.log('No user ID found')
             return None
-        if 'id' not in data['user']['user']:
-            return None
+        return _id
 
-        return str(data['user']['user']['id'])
-
-    def getStatus(self):
-        data = self._getStatusData(self.username)
-        if data is None:
-            return Status.UNKNOWN
-
-        error = self._update_lastInfo(data)
-        if error:
-            return error
-
-        if 'user' in data and 'user' in data['user']:
-            model_data = data['user']['user']
-            if model_data.get('gender'):
-                self.gender = StripChat._GENDER_MAP.get(model_data.get('gender'))
-
-            if model_data.get('country'):
-                self.country = model_data.get('country', '').upper()
-            elif model_data.get('languages'):
-                for lang in model_data['languages']:
-                    if lang.upper() in COUNTRIES:
-                        self.country = lang.upper()
-                        break
-
-        status = self.lastInfo['model'].get('status')
-        if status == "public" and self.lastInfo["isCamAvailable"] and self.lastInfo["isCamActive"]:
+    def _applyModelData(self, model_data):
+        if model_data.get('gender'):
+            self.gender = StripChat._GENDER_MAP.get(model_data.get('gender'))
+        if model_data.get('country'):
+            self.country = model_data.get('country', '').upper()
+        elif model_data.get('languages'):
+            for lang in model_data['languages']:
+                if lang.upper() in COUNTRIES:
+                    self.country = lang.upper()
+                    break
+        self.lastInfo = {'model': model_data}
+        status = model_data.get('status')
+        if status == "public" and (model_data.get('isOnline') or model_data.get('isLive')):
             return Status.PUBLIC
         if status in self._PRIVATE_STATUSES:
             return Status.PRIVATE
         if status in self._OFFLINE_STATUSES:
             return Status.OFFLINE
-        if self.lastInfo['model'].get('isDeleted') is True:
-            return Status.NOTEXIST
-        if data['user'].get('isGeoBanned') is True:
-            return Status.RESTRICTED
-        self.logger.warn(f'Got unknown status: {status}')
+        self.logger.warn('Got unknown status: ' + str(status))
         return Status.UNKNOWN
+
+    def getStatus(self):
+        if not self.room_id:
+            self.room_id = self.getRoomIdFromUsername(self.username)
+            if not self.room_id:
+                return Status.NOTEXIST
+        data_map = StripChat._fetchModelsList([self.room_id])
+        model_data = data_map.get(str(self.room_id))
+        if not model_data:
+            return Status.NOTEXIST
+        model_username = model_data.get('username')
+        if model_data.get('previousUsername') == self.username and model_username and model_username != self.username:
+            self.logger.info('Model name changed, new name: ' + model_username)
+            _old_dir = self.outputFolder
+            self.setUsername(model_username)
+            _new_dir = self.outputFolder
+            try:
+                if os.path.exists(_old_dir) and not os.path.exists(_new_dir):
+                    os.rename(_old_dir, _new_dir)
+            except Exception as _e:
+                self.logger.warning('Could not rename output folder: ' + str(_e))
+        return self._applyModelData(model_data)
 
     @classmethod
     def getStatusBulk(cls, streamers):
@@ -282,7 +309,7 @@ class StripChat(RoomIdBot):
             if not isinstance(streamer, StripChat):
                 continue
             if streamer.room_id:
-                model_ids[streamer.room_id] = streamer
+                model_ids[str(streamer.room_id)] = streamer
 
         base_url = 'https://stripchat.com/api/front/models/list?'
         batch_num = 100
@@ -301,16 +328,15 @@ class StripChat(RoomIdBot):
             data_map |= {str(model['id']): model for model in data.get('models', [])}
 
         for model_id, streamer in model_ids.items():
-            model_data = data_map.get(model_id)
+            model_data = data_map.get(str(model_id))
             if not model_data:
-                streamer.setStatus(Status.UNKNOWN)
-                continue
+                continue  # missing id = renamed/deleted/transient; leave status untouched
             if model_data.get('gender'):
                 streamer.gender = cls._GENDER_MAP.get(model_data.get('gender'))
             if model_data.get('country'):
                 streamer.country = model_data.get('country', '').upper()
             status = model_data.get('status')
-            if status == "public" and model_data.get("isOnline"):
+            if status == "public" and (model_data.get("isOnline") or model_data.get("isLive")):
                 streamer.setStatus(Status.PUBLIC)
             elif status in cls._PRIVATE_STATUSES:
                 streamer.setStatus(Status.PRIVATE)
