@@ -318,9 +318,12 @@ class Bot(Thread):
         variant_m3u8.dump(playlist_path)
         return playlist_path
 
-    def getWantedResolutionPlaylist(self, url):
+    def getWantedResolutionPlaylist(self, url, m3u_data=None):
         try:
-            variants = self.getPlaylistVariants(url)
+            if m3u_data is None:
+                variants = self.getPlaylistVariants(url)
+            else:
+                variants = self.getPlaylistVariants(url, m3u_data)
             if type(variants) is tuple:
                 sources, variant_m3u8 = variants
             else:
